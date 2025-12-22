@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Sango.SoundBroadcast.ConsoleApp/Sango.SoundBroadcast.ConsoleApp.csproj" />
+  <Project Path="Sango.SoundBroadcast.Core/Sango.SoundBroadcast.Core.csproj" />
+</Solution>
