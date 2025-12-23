@@ -1,13 +1,17 @@
-﻿namespace Sango.SoundBroadcast.Core;
+﻿using System.Net;
+using System.Net.Sockets;
 
-/// <summary>
-/// 客户端信息
-/// </summary>
-public class ClientInfo
+namespace Sango.SoundBroadcast.Core;
+
+public class ClientInfo(EndPoint remote, string name, DateTime time)
 {
-    public string Id { get; set; }
-    public string IpAddress { get; set; }
-    public DateTime ConnectedTime { get; set; }
-    public DateTime LastActivity { get; set; }
-    public AudioMetadata Metadata { get; set; }
+    public const int DefaultAttenuation = 10;
+
+    public int Attenuation { get; set; } = DefaultAttenuation;
+
+    public EndPoint Remote { get; set; } = remote;
+
+    public string Name { get; set; } = name;
+
+    public DateTime LastHeartbeat { get; set; } = time;
 }
