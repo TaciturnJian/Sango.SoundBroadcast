@@ -12,10 +12,11 @@ public class SoundServer(WaveFormat format, CancellationTokenSource cts) : IDisp
 
     public string Name { get; set; } = "anonymous";
 
-    public MixedSoundPlayer Player { get; set; } = new MixedSoundPlayer(format, cts);
+    public MixedSoundPlayer Player { get; set; } = new (format, cts);
 
     private void HandleHeartbeatMessage(Socket socket, EndPoint remote, byte[] data)
     {
+        Console.WriteLine($"收到来自({remote.Serialize()})的心跳包({data.Length}字节)，正在处理");
         try
         {
             var message = HeartbeatMessage.FromBytes(data);
@@ -36,6 +37,7 @@ public class SoundServer(WaveFormat format, CancellationTokenSource cts) : IDisp
 
     private void HandleSoundPackage(Socket socket, EndPoint remote, byte[] data)
     {
+        Console.WriteLine($"收到来自({remote.Serialize()})的音频包({data.Length}字节)，正在处理");
         try
         {
             var header = SoundPackageHeader.FromBytes(data);
@@ -58,7 +60,7 @@ public class SoundServer(WaveFormat format, CancellationTokenSource cts) : IDisp
 
     public void HandleClientMessage(Socket socket, EndPoint remote, byte[] data)
     {
-        if (!socket.Connected || data.Length == 0 || socket.RemoteEndPoint is null) return;
+        Console.WriteLine($"读取到({data.Length})字节的数据");
         if (data.Length < 128) HandleHeartbeatMessage(socket, remote, data);
         else HandleSoundPackage(socket, remote, data);
     }
@@ -86,7 +88,7 @@ public class SoundServer(WaveFormat format, CancellationTokenSource cts) : IDisp
         }
     }
 
-    public void BroadcastMessage(Socket socket, byte[] data)
+    public void SendMessage(Socket socket, byte[] data)
     {
         if (data.Length == 0) return;
         
