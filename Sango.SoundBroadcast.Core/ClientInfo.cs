@@ -5,7 +5,7 @@ namespace Sango.SoundBroadcast.Core;
 
 public class ClientInfo(EndPoint remote, string name, DateTime time)
 {
-    public const int DefaultAttenuation = 10;
+    public const int DefaultAttenuation = 0xffff;
 
     public int Attenuation { get; set; } = DefaultAttenuation;
 

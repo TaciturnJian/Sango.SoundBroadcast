@@ -7,7 +7,7 @@ public struct HeartbeatMessage
 {
     public DateTime TimeStamp;
 
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 10)]
     public string Name;
 
     public static HeartbeatMessage? FromBytes(byte[] data)

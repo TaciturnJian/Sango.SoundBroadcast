@@ -12,9 +12,14 @@ public struct SoundPackageHeader
     public int Channels;
     public int DataLength; // 应当小于 1024
 
+    public static int GetSize()
+    {
+        return Marshal.SizeOf(typeof(SoundPackageHeader));
+    }
+
     public static SoundPackageHeader? FromBytes(byte[] data)
     {
-        if (data.Length < Marshal.SizeOf(typeof(SoundPackageHeader)))
+        if (data.Length < GetSize())
             return null;
 
 

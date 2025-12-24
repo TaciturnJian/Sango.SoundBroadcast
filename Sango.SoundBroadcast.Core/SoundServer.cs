@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -42,14 +43,26 @@ public class SoundServer(WaveFormat format, CancellationTokenSource cts) : IDisp
         {
             var header = SoundPackageHeader.FromBytes(data);
             if (header is null || header.Value.DataLength <= 0) return;
-            var buffer = new byte[header.Value.DataLength];
-            Array.Copy(data, Marshal.SizeOf<SoundPackageHeader>(), buffer, 0, buffer.Length);
+
+            var header_size = SoundPackageHeader.GetSize();
+            using var input = new MemoryStream(data, header_size, data.Length - header_size);
+            using var output = new MemoryStream();
+            using (var gzip = new GZipStream(input, CompressionMode.Decompress))
+            {
+                gzip.CopyTo(output);
+            }
+            var buffer = output.ToArray();
 
             var waveform = header.Value.ToFormat();
-            var provider = new BufferedWaveProvider(waveform);
+            var provider = new BufferedWaveProvider(waveform)
+            {
+                BufferDuration = TimeSpan.FromSeconds(3),
+                DiscardOnBufferOverflow = true,
+                ReadFully = false
+            };
             provider.AddSamples(buffer, 0, buffer.Length);
             var id = Player.Mixer.AddSample(new SampleInfo(provider.ToSampleProvider()));
-            Thread.Sleep(TimeSpan.FromSeconds(1));
+            Thread.Sleep(TimeSpan.FromSeconds(3));
             Player.Mixer.RemoveSample(id);
         }
         catch (Exception ex)
@@ -60,8 +73,7 @@ public class SoundServer(WaveFormat format, CancellationTokenSource cts) : IDisp
 
     public void HandleClientMessage(Socket socket, EndPoint remote, byte[] data)
     {
-        Console.WriteLine($"读取到({data.Length})字节的数据");
-        if (data.Length < 128) HandleHeartbeatMessage(socket, remote, data);
+        if (data.Length <= SoundPackageHeader.GetSize()) HandleHeartbeatMessage(socket, remote, data);
         else HandleSoundPackage(socket, remote, data);
     }
 
@@ -98,11 +110,7 @@ public class SoundServer(WaveFormat format, CancellationTokenSource cts) : IDisp
             try
             {
                 socket.SendTo(data, info.Remote);
-                Console.WriteLine($"向客户端[{info.Name}]广播数据成功，长度：{data.Length}");
-
                 info.Attenuation--;
-                Console.WriteLine($"客户端[{info.Name}]衰减值更新为：{info.Attenuation}");
-
                 if (info.Attenuation <= 0)
                 {
                     Console.WriteLine(Clients.TryRemove(info.Name, out var _)

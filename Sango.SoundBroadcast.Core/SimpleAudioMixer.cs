@@ -10,8 +10,8 @@ public class SimpleAudioMixer
 
     public class MixerBuffer
     {
-        public const int SampleBufferSizeForOneChannel = 1024;
-        public const int SampleBufferSize = 2 * SampleBufferSizeForOneChannel;
+        public const int SampleBufferSize = 1024;
+        public const float SilenceThreshold = 0.001f;
         private readonly float[] WorkBuffer = new float[SampleBufferSize];
         private readonly float[] ResultBuffer = new float[SampleBufferSize];
         private int MaxRead;
@@ -46,16 +46,22 @@ public class SimpleAudioMixer
             if (read_count > MaxRead) MaxRead = read_count;
         }
 
-        public void WriteResultTo(BufferedWaveProvider wave)
+        public bool ContainsSound()
         {
             for (var i = 0; i < MaxRead; ++i)
-                WriteSampleToWave(ResultBuffer[i], wave);
+            {
+                if (Math.Abs(ResultBuffer[i]) > SilenceThreshold) return true;
+            }
+
+            return false;
         }
 
-        public static TimeSpan GetSleepTime(WaveFormat outputFormat)
+        public void WriteResultTo(BufferedWaveProvider wave)
         {
-            var ms = SampleBufferSizeForOneChannel * 1000 / outputFormat.SampleRate;
-            return TimeSpan.FromMilliseconds(ms);
+            if (!ContainsSound()) return;
+
+            for (var i = 0; i < MaxRead; ++i)
+                WriteSampleToWave(ResultBuffer[i], wave);
         }
 
         public static void WriteSampleToWave(float sample, BufferedWaveProvider wave)
@@ -88,19 +94,15 @@ public class SimpleAudioMixer
     {
         return ThreadPool.QueueUserWorkItem(_ =>
         {
-            var sleep_time = MixerBuffer.GetSleepTime(output.WaveFormat);
-            var current_time = DateTime.UtcNow;
-            var end_time = current_time + sleep_time;
+            var threshold = TimeSpan.FromMilliseconds(20);
             var buffer = new MixerBuffer();
             while (!cts.IsCancellationRequested)
             {
-                while (current_time < end_time)
+                while (output.BufferedDuration > threshold * 10)
                 {
-                    Thread.Sleep(TimeSpan.FromMilliseconds(2));
-                    current_time = DateTime.UtcNow;
+                    Thread.Sleep(threshold);
                 }
 
-                end_time += sleep_time;
                 MixTo(output, buffer);
             }
         });
