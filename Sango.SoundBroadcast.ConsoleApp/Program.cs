@@ -31,8 +31,8 @@ const int Payload = FrameSize * 2;
 
 var format = new WaveFormat(SampleRate, Channels);
 var voice_buffer = new byte[Payload];
-var clients = new List<IPEndPoint>();
-using var music_play_cts = new CancellationTokenSource();
+var clients = new Dictionary<IPEndPoint, float>();
+var music_play_cts = new CancellationTokenSource();
 using var voice_encoder = OpusCodecFactory.CreateEncoder(SampleRate, Channels);
 using var udp = new UdpClient(host_endpoint);
 using var sounder = new SimpleSoundPlayer(AudioUdp.Format);
@@ -55,14 +55,24 @@ if (!mute)
     foreach (var line in File.ReadAllLines(broadcast_client_file))
     {
         if (line.StartsWith('#') || line.Trim().Length == 0) continue;
-        if (!IPEndPoint.TryParse(line, out var client))
+        var first_space_index = line.IndexOf(' ');
+        var ep_str = first_space_index < 0 ? line : line[..first_space_index].Trim();
+        var volume_str = first_space_index < 0 ? "1.0" : line[first_space_index..].Trim();
+
+        if (!IPEndPoint.TryParse(ep_str, out var client))
         {
             Console.WriteLine($"在解析客户端地址时发生错误，字符串({line})可能不是正确的地址");
             continue;
         }
 
+        if (!float.TryParse(volume_str, out var volume))
+        {
+            Console.WriteLine($"在解析客户端音量时发生错误，字符串({volume_str})可能不是正确的浮点数");
+            volume = 1.0f;
+        }
+
         Console.WriteLine($"将目标客户端({client.Serialize()})添加到广播列表");
-        clients.Add(client);
+        clients.Add(client, volume);
     }
 
     if (clients.Count == 0)
@@ -77,8 +87,10 @@ if (!mute)
 ThreadPool.QueueUserWorkItem(_ =>
 {
     Console.WriteLine("正在执行接收任务");
-    AudioUdp.ReceiveTask(udp, sounder);
+    ReceiveTask();
 });
+
+Thread.Sleep(TimeSpan.FromSeconds(1));
 
 while (true)
 {
@@ -93,6 +105,36 @@ while (true)
     ProcessCommand(cmd.ToLower(), rest);
 }
 
+void ReceiveTask()
+{
+    using var decoder = OpusCodecFactory.CreateDecoder(SampleRate, Channels);
+    while (true)
+    {
+        Thread.Sleep(TimeSpan.FromMilliseconds(0));
+        try
+        {
+            var remote = new IPEndPoint(IPAddress.Any, 0);
+            var received_bytes = udp.Receive(ref remote);
+            Console.WriteLine($"从({remote.Serialize()})接收到{received_bytes.Length}字节的数据");
+
+            var pcm = new short[Payload * Channels];
+            var samples = decoder.Decode(received_bytes, pcm, FrameSize);
+
+            var audio_bytes = new byte[samples * sizeof(short)];
+            Buffer.BlockCopy(pcm, 0, audio_bytes, 0, audio_bytes.Length);
+            if (clients.TryGetValue(remote, out var volume))
+            {
+                AdjustVolume(audio_bytes, audio_bytes.Length, volume);
+            }
+
+            sounder.WaveProvider.AddSamples(audio_bytes, 0, audio_bytes.Length);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"在接收数据时发生错误：{e}");
+        }
+    }
+}
 
 void ProcessCommand(string cmd, string rest)
 {
@@ -131,25 +173,38 @@ void ProcessCommand(string cmd, string rest)
     Console.WriteLine($"未知的命令：{cmd}");
 }
 
+static void AdjustVolume(byte[] buffer, int bytes, float volume)
+{
+    for (var i = 0; i < bytes; i += 2)
+    {
+        if (i + 1 >= bytes) break;
+
+        var sample = BitConverter.ToInt16(buffer, i);
+        var adjusted = sample * volume;
+        adjusted = Math.Clamp(adjusted, short.MinValue, short.MaxValue);
+        var adjusted_bytes = BitConverter.GetBytes((short)adjusted);
+        buffer[i] = adjusted_bytes[0];
+        buffer[i + 1] = adjusted_bytes[1];
+    }
+}
+
 void PlayMusic(string file, float volume)
 {
+    music_play_cts.Dispose();
+    music_play_cts = new CancellationTokenSource();
+
     using var audio = new AudioFileReader(file);
     using var convert_stream = new WaveFormatConversionStream(
         format,
         new ResamplerDmoStream(audio, format)
     );
-    music_play_cts.TryReset();
 
     var audio_buffer = new byte[Payload];
 
     var sleep_time = TimeSpan.FromMilliseconds(1000.0 * Payload / (format.SampleRate * sizeof(short)));
     var end_time = DateTime.UtcNow;
-    while (true)
+    while (!music_play_cts.IsCancellationRequested)
     {
-        if (music_play_cts.IsCancellationRequested)
-        {
-            return;
-        }
         var current_time = DateTime.UtcNow;
         while (current_time < end_time)
         {
@@ -161,10 +216,7 @@ void PlayMusic(string file, float volume)
         var bytes = convert_stream.Read(audio_buffer, 0, Payload);
         if (bytes == 0) 
             break;
-        /*for (var i = 0; i < bytes; i += 1)
-        {
-            audio_buffer[i] = (byte)(audio_buffer[i] * volume);
-        }*/
+        AdjustVolume(audio_buffer, bytes, volume);
         sounder.WaveProvider.AddSamples(audio_buffer, 0, bytes);
         BroadcastData(audio_buffer, bytes);
     }
@@ -180,12 +232,12 @@ void BroadcastData(byte[] buffer, int bytesRecorded)
     {
         try
         {
-            Console.WriteLine($"正在向({client.Serialize()})发送音频包({encoded_bytes}字节)");
-            udp.Send(voice_buffer, encoded_bytes, client);
+            Console.WriteLine($"正在向({client.Key.Serialize()})发送音频包({encoded_bytes}字节)");
+            udp.Send(voice_buffer, encoded_bytes, client.Key);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"向({client.Serialize()})发送数据包失败：{ex}");
+            Console.WriteLine($"向({client.Key.Serialize()})发送数据包失败：{ex}");
         }
     }
 }
