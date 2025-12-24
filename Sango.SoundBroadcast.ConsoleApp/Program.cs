@@ -1,6 +1,11 @@
-﻿using System.Net;
-using System.Net.Sockets;
+﻿using Concentus;
+
+using NAudio.Wave;
+
 using Sango.SoundBroadcast.Core;
+
+using System.Net;
+using System.Net.Sockets;
 
 if (args.Length < 2)
 {
@@ -17,7 +22,25 @@ if (!IPEndPoint.TryParse(host_address, out var host_endpoint))
 
 var app_name = args[1];
 
+const int SampleRate = 16000;
+const int SampleBits = 16;
+const int Channels = 1;
+const int BufferDurationMs = 20;
+const int FrameSize = SampleRate / (1000 / BufferDurationMs);
+const int Payload = FrameSize * 2;
+
+var format = new WaveFormat(SampleRate, Channels);
+var voice_buffer = new byte[Payload];
+var clients = new List<IPEndPoint>();
+using var music_play_cts = new CancellationTokenSource();
+using var voice_encoder = OpusCodecFactory.CreateEncoder(SampleRate, Channels);
 using var udp = new UdpClient(host_endpoint);
+using var sounder = new SimpleSoundPlayer(AudioUdp.Format);
+using var wave_in = new WaveInEvent { BufferMilliseconds = BufferDurationMs, WaveFormat = format };
+wave_in.DataAvailable += (_, e) =>
+{
+    BroadcastData(e.Buffer, e.BytesRecorded);
+};
 
 var mute = args.Length < 3;
 if (!mute)
@@ -29,7 +52,6 @@ if (!mute)
         return;
     }
 
-    var clients = new List<IPEndPoint>();
     foreach (var line in File.ReadAllLines(broadcast_client_file))
     {
         if (line.StartsWith('#') || line.Trim().Length == 0) continue;
@@ -50,8 +72,120 @@ if (!mute)
     }
 
     Console.WriteLine("正在执行广播任务");
-    AudioUdp.BeginBroadcast(udp, app_name, clients);
 }
 
-Console.WriteLine("正在执行接收任务");
-AudioUdp.ReceiveTask(udp);
+ThreadPool.QueueUserWorkItem(_ =>
+{
+    Console.WriteLine("正在执行接收任务");
+    AudioUdp.ReceiveTask(udp, sounder);
+});
+
+while (true)
+{
+    Console.Write(">> ");
+    var line = Console.ReadLine();
+    if (line is null) continue;
+    line = line.Trim();
+    if (line.Length == 0) continue;
+    var first_space_index = line.IndexOf(' ');
+    var cmd = first_space_index < 0 ? line : line[..first_space_index].Trim();
+    var rest = first_space_index < 0 ? "" : line[first_space_index..].Trim();
+    ProcessCommand(cmd.ToLower(), rest);
+}
+
+
+void ProcessCommand(string cmd, string rest)
+{
+    if (cmd == "mute")
+    {
+        wave_in.StopRecording();
+        return;
+    }
+
+    if (cmd == "speak")
+    {
+        wave_in.StartRecording();
+        return;
+    }
+
+    if (cmd == "play")
+    {
+        var first_space_index = rest.IndexOf(' ');
+        var file = first_space_index < 0 ? rest : rest[..first_space_index].Trim();
+        var volume_str = first_space_index < 0 ? "1.0" : rest[first_space_index..].Trim();
+        var volume = float.TryParse(volume_str, out var result) ? result : 1.0f;
+
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            PlayMusic(file, volume);
+        });
+        return;
+    }
+
+    if (cmd == "stop")
+    {
+        music_play_cts.Cancel();
+        return;
+    }
+
+    Console.WriteLine($"未知的命令：{cmd}");
+}
+
+void PlayMusic(string file, float volume)
+{
+    using var audio = new AudioFileReader(file);
+    using var convert_stream = new WaveFormatConversionStream(
+        format,
+        new ResamplerDmoStream(audio, format)
+    );
+    music_play_cts.TryReset();
+
+    var audio_buffer = new byte[Payload];
+
+    var sleep_time = TimeSpan.FromMilliseconds(1000.0 * Payload / (format.SampleRate * sizeof(short)));
+    var end_time = DateTime.UtcNow;
+    while (true)
+    {
+        if (music_play_cts.IsCancellationRequested)
+        {
+            return;
+        }
+        var current_time = DateTime.UtcNow;
+        while (current_time < end_time)
+        {
+            Thread.Sleep(TimeSpan.FromMilliseconds(1));
+            current_time = DateTime.UtcNow;
+        }
+
+        end_time += sleep_time;
+        var bytes = convert_stream.Read(audio_buffer, 0, Payload);
+        if (bytes == 0) 
+            break;
+        /*for (var i = 0; i < bytes; i += 1)
+        {
+            audio_buffer[i] = (byte)(audio_buffer[i] * volume);
+        }*/
+        sounder.WaveProvider.AddSamples(audio_buffer, 0, bytes);
+        BroadcastData(audio_buffer, bytes);
+    }
+}
+
+void BroadcastData(byte[] buffer, int bytesRecorded)
+{
+    var samples = bytesRecorded / 2;
+    var sample_buffer = new short[samples];
+    Buffer.BlockCopy(buffer, 0, sample_buffer, 0, bytesRecorded);
+    var encoded_bytes = voice_encoder.Encode(sample_buffer, FrameSize, voice_buffer, Payload);
+    foreach (var client in clients)
+    {
+        try
+        {
+            Console.WriteLine($"正在向({client.Serialize()})发送音频包({encoded_bytes}字节)");
+            udp.Send(voice_buffer, encoded_bytes, client);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"向({client.Serialize()})发送数据包失败：{ex}");
+        }
+    }
+}

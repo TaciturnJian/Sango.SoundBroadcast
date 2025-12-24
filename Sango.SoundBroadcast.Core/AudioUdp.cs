@@ -19,9 +19,8 @@ public class AudioUdp
 
     public static WaveFormat Format { get; } = new(SampleRate, Channels);
 
-    public static void ReceiveTask(UdpClient udp)
+    public static void ReceiveTask(UdpClient udp, SimpleSoundPlayer sounder)
     {
-        using var sounder = new SimpleSoundPlayer(Format);
         using var decoder = OpusCodecFactory.CreateDecoder(SampleRate, Channels);
         while (true)
         {
@@ -49,7 +48,7 @@ public class AudioUdp
 
     public static void BeginBroadcast(UdpClient udp, string app, IEnumerable<IPEndPoint> clients)
     {
-        var devices = new MMDeviceEnumerator();
+        /*var devices = new MMDeviceEnumerator();
         var device = devices.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
         var sessions = device.AudioSessionManager.Sessions;
         AudioSessionControl? target_session = null;
@@ -69,7 +68,7 @@ public class AudioUdp
             }
         }
 
-        BeginAppCapture();
+        BeginAppCapture();*/
 
         var voice_buffer = new byte[Payload];
         var voice_encoder = OpusCodecFactory.CreateEncoder(SampleRate, Channels);
@@ -96,7 +95,7 @@ public class AudioUdp
         wave_in.StartRecording();
         return;
 
-        void BeginAppCapture()
+        /*void BeginAppCapture()
         {
             if (target_session is null)
             {
@@ -134,6 +133,6 @@ public class AudioUdp
                 }
             };
             app_capture.StartRecording();
-        }
+        }*/
     }
 }
