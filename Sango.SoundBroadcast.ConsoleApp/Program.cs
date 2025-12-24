@@ -1,11 +1,10 @@
 ﻿using System.Net;
 using System.Net.Sockets;
-using NAudio.Wave;
 using Sango.SoundBroadcast.Core;
 
-if (args.Length < 1)
+if (args.Length < 2)
 {
-    Console.WriteLine("使用方式：\n\t<程序名> <监听地址> [广播客户端列表文件]");
+    Console.WriteLine("使用方式：\n\t<程序名> <监听地址> <捕获程序名称|!none> [广播客户端列表文件]");
     return;
 }
 
@@ -16,12 +15,14 @@ if (!IPEndPoint.TryParse(host_address, out var host_endpoint))
     return;
 }
 
+var app_name = args[1];
+
 using var udp = new UdpClient(host_endpoint);
 
-var mute = args.Length < 2;
+var mute = args.Length < 3;
 if (!mute)
 {
-    var broadcast_client_file = args[1];
+    var broadcast_client_file = args[2];
     if (!File.Exists(broadcast_client_file))
     {
         Console.WriteLine($"找不到广播客户端列表文件({broadcast_client_file})");
@@ -49,7 +50,7 @@ if (!mute)
     }
 
     Console.WriteLine("正在执行广播任务");
-    AudioUdp.BeginBroadcast(udp, clients);
+    AudioUdp.BeginBroadcast(udp, app_name, clients);
 }
 
 Console.WriteLine("正在执行接收任务");

@@ -2,7 +2,7 @@
   "profiles": {
     "Sango.SoundBroadcast.ConsoleApp": {
       "commandName": "Project",
-      "commandLineArgs": "127.0.0.1:9001 ./clients.txt"
+      "commandLineArgs": "127.0.0.1:9001 !none ./clients.txt"
     }
   }
 }
