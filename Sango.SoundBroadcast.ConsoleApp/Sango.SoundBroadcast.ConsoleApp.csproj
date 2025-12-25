@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Sango.SoundBroadcast.Core\Sango.SoundBroadcast.Core.csproj" />
   </ItemGroup>
 

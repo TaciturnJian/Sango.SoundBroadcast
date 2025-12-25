@@ -1,4 +1,5 @@
-﻿using Concentus;
+﻿using System.Collections.Concurrent;
+using Concentus;
 
 using NAudio.Wave;
 
@@ -6,6 +7,7 @@ using Sango.SoundBroadcast.Core;
 
 using System.Net;
 using System.Net.Sockets;
+using Whisper.net;
 
 if (args.Length < 2)
 {
@@ -20,8 +22,6 @@ if (!IPEndPoint.TryParse(host_address, out var host_endpoint))
     return;
 }
 
-var app_name = args[1];
-
 const int SampleRate = 16000;
 const int SampleBits = 16;
 const int Channels = 1;
@@ -29,6 +29,7 @@ const int BufferDurationMs = 20;
 const int FrameSize = SampleRate / (1000 / BufferDurationMs);
 const int Payload = FrameSize * 2;
 
+var whisper_queue = new ConcurrentQueue<byte[]>();
 var format = new WaveFormat(SampleRate, Channels);
 var voice_buffer = new byte[Payload];
 var clients = new Dictionary<IPEndPoint, float>();
@@ -90,7 +91,44 @@ ThreadPool.QueueUserWorkItem(_ =>
     ReceiveTask();
 });
 
-Thread.Sleep(TimeSpan.FromSeconds(1));
+var whisper_model = "./ggml-small.bin";
+Console.WriteLine($"正在加载文本转语音模型文件({whisper_model})");
+using var whisper_factory = WhisperFactory.FromPath(whisper_model);
+using var whisper_processor = whisper_factory.CreateBuilder()
+    .WithLanguage("zh")
+    .Build();
+ThreadPool.QueueUserWorkItem(async _ =>
+{
+    Console.WriteLine("正在执行语音转文本服务");
+    var max = 1024 * 40;
+    var buffer = new float[max];
+    var buffer_index = 0;
+    var threshold = max - 1024 * 2;
+    while (true)
+    {
+        Thread.Sleep(TimeSpan.FromMilliseconds(1));
+        if (!whisper_queue.TryDequeue(out var package)) continue;
+        for (var i = 0; i + 1 < package.Length; i += 2)
+        {
+            var short_sample = BitConverter.ToInt16(package, i);
+            buffer[buffer_index ++] = short_sample / 32768.0f;
+        }
+
+        if (buffer_index < threshold)
+        {
+            continue;
+        }
+
+        await foreach (var segment in whisper_processor.ProcessAsync(new ReadOnlyMemory<float>(buffer, 0, buffer_index)))
+        {
+            Console.WriteLine($"语音识别结果({segment.Start}->{segment.End})({segment.NoSpeechProbability}): {segment.Text}");
+        }
+
+        buffer_index = 0;
+    }
+});
+
+Thread.Sleep(TimeSpan.FromSeconds(2)); // 可以改成1，加载会快一秒
 
 while (true)
 {
@@ -115,7 +153,7 @@ void ReceiveTask()
         {
             var remote = new IPEndPoint(IPAddress.Any, 0);
             var received_bytes = udp.Receive(ref remote);
-            Console.WriteLine($"从({remote.Serialize()})接收到{received_bytes.Length}字节的数据");
+            //Console.WriteLine($"从({remote.Serialize()})接收到{received_bytes.Length}字节的数据");
 
             var pcm = new short[Payload * Channels];
             var samples = decoder.Decode(received_bytes, pcm, FrameSize);
@@ -222,8 +260,22 @@ void PlayMusic(string file, float volume)
     }
 }
 
+void SendDataToWhisper(byte[] buffer, int offset, int length)
+{
+    var bytes = new byte[length];
+    Buffer.BlockCopy(buffer, offset, bytes, 0, bytes.Length);
+
+    var threshold = 32;
+    if (whisper_queue.Count > threshold)
+    {
+        whisper_queue.Clear();
+    }
+    whisper_queue.Enqueue(bytes);
+}
+
 void BroadcastData(byte[] buffer, int bytesRecorded)
 {
+    SendDataToWhisper(buffer, 0, bytesRecorded);
     var samples = bytesRecorded / 2;
     var sample_buffer = new short[samples];
     Buffer.BlockCopy(buffer, 0, sample_buffer, 0, bytesRecorded);
@@ -232,7 +284,7 @@ void BroadcastData(byte[] buffer, int bytesRecorded)
     {
         try
         {
-            Console.WriteLine($"正在向({client.Key.Serialize()})发送音频包({encoded_bytes}字节)");
+            //Console.WriteLine($"正在向({client.Key.Serialize()})发送音频包({encoded_bytes}字节)");
             udp.Send(voice_buffer, encoded_bytes, client.Key);
         }
         catch (Exception ex)
